@@ -52,5 +52,5 @@ panic_abort = ["panic-abort"]
 panic_rtt_target = ["panic-rtt-target"]
 
 [patch.crates-io]
-#atsam4-hal = { path = "/home/hyatt/git/atsam-rs/atsam4-hal" }
+atsam4-hal = { path = "/home/hyatt/git/atsam-rs/atsam4-hal" }
 #kiibohd-core = { path = "../../../kiibohd-core" }

@@ -23,8 +23,11 @@ use gemini::{
         gpio::*,
         pac::Peripherals,
         prelude::*,
+        rtt::RealTimeTimer,
+        time::duration::Extensions,
         watchdog::Watchdog,
         OutputPin,
+        ToggleableOutputPin,
     },
     Pins,
 };
@@ -75,13 +78,14 @@ const APP: () = {
     struct Resources {
         debug_led: Pb0<Output<PushPull>>,
         wdt: Watchdog,
+        rtt: RealTimeTimer,
         rtt_host: rtt_target::DownChannel,
     }
 
     //
     // Initialization
     //
-    #[init(schedule = [blink_led, key_scan])]
+    #[init(schedule = [key_scan])]
     fn init(mut cx: init::Context) -> init::LateResources {
         // XXX (HaaTa): Fix this in the bootloader if possible!
         unsafe { cx.core.SCB.vtor.write(0x6000) };
@@ -130,42 +134,30 @@ const APP: () = {
         controller_setup();
         log::trace!("controller_setup done");
 
+        // Setup main timer (TODO May want to use a TC timer instead and reserve this for sleeping)
+        let mut rtt = RealTimeTimer::new(peripherals.RTT, 3, false);
+        rtt.start(1_000_000u32.microseconds());
+        rtt.enable_alarm_interrupt();
+        log::trace!("RTT Timer started");
+
         // Schedule tasks
         cx.schedule.key_scan(cx.start).unwrap();
-
-        // Task scheduling
-        cx.schedule
-            .blink_led(cx.start + get_master_clock_frequency().0.cycles())
-            .unwrap();
         log::trace!("All tasks scheduled");
 
         init::LateResources {
             debug_led: pins.debug_led,
             wdt,
+            rtt,
             rtt_host: channels.down.0,
         }
     }
 
     //
     // LED Blink Task
-    //
-    #[task(resources = [debug_led], schedule = [blink_led])]
-    fn blink_led(cx: blink_led::Context) {
-        static mut STATE: bool = false;
-
-        if !(*STATE) {
-            cx.resources.debug_led.set_low().ok();
-            cx.schedule
-                .blink_led(Instant::now() + (get_master_clock_frequency().0 / 20).cycles())
-                .unwrap();
-            *STATE = true;
-        } else {
-            cx.resources.debug_led.set_high().ok();
-            cx.schedule
-                .blink_led(Instant::now() + (get_master_clock_frequency().0 / 2).cycles())
-                .unwrap();
-            *STATE = false;
-        }
+    #[task(binds = RTT, resources = [rtt, debug_led])]
+    fn rtt(cx: rtt::Context) {
+        cx.resources.rtt.clear_interrupt_flags();
+        cx.resources.debug_led.toggle().ok();
     }
 
     /// Keyscanning Task
@@ -262,10 +254,12 @@ const APP: () = {
         unsafe { UART0_Handler() };
     }
 
+    /*
     #[task(binds = UDP, priority = 13)]
     fn udp(_: udp::Context) {
-        unsafe { UDP_Handler() };
+        //unsafe { UDP_Handler() };
     }
+    */
 
     // RTIC requires that unused interrupts are declared in an extern block when
     // using software tasks; these free interrupts will be used to dispatch the
