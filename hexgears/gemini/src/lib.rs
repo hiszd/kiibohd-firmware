@@ -11,7 +11,7 @@ pub mod controller;
 pub use atsam4_hal as hal;
 use paste::paste;
 
-use atsam4_hal::{define_pin_map, gpio::*};
+use atsam4_hal::{define_pin_map, gpio::*, pac::MATRIX};
 
 define_pin_map! {
     struct Pins,
@@ -52,9 +52,13 @@ define_pin_map! {
     pin issi0_sda = a3<PfA, into_peripheral_function_a>,
     pin issi0_scl = a4<PfA, into_peripheral_function_a>,
     pin issi1_sda = b4<PfA, into_peripheral_function_a>,
-    pin issi1_scl = b5<PfA, into_peripheral_function_a>,
+    //pin issi1_scl = b5<PfA, into_peripheral_function_a>,
 
     // Serial Console (UART1)
     pin uart0_rx = a9<PfA, into_peripheral_function_a>,
     pin uart0_tx = a10<PfA, into_peripheral_function_a>,
+
+    // USB (UDP)
+    pin udp_ddm = b10<SysFn, into_system_function>,
+    pin udp_ddp = b11<SysFn, into_system_function>,
 }

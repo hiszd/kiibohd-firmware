@@ -10,65 +10,51 @@
 #![no_std]
 #![no_main]
 
+use const_env::from_env;
 use core::panic::PanicInfo;
 use cortex_m_rt::exception;
+use kiibohd_log::{log, Logger};
+use kiibohd_usb::HidCountryCode;
 use rtic::app;
 use rtic::cyccnt::{Instant, U32Ext as _};
-use rtt_target::{rprintln, rtt_init_default};
 
 use gemini::{
     controller::*,
     hal::{
-        clock::{get_master_clock_frequency, ClockController, MainClock, SlowClock},
+        clock::{ClockController, MainClock, SlowClock},
         gpio::*,
         pac::Peripherals,
         prelude::*,
         rtt::RealTimeTimer,
         time::duration::Extensions,
+        udp::{
+            usb_device,
+            usb_device::{
+                bus::UsbBusAllocator,
+                device::{UsbDeviceBuilder, UsbVidPid},
+            },
+            UdpBus,
+        },
         watchdog::Watchdog,
-        OutputPin,
         ToggleableOutputPin,
     },
     Pins,
 };
 
-struct KiibohdLogger {
-    level_filter: log::LevelFilter,
-}
+#[from_env]
+const VID: u16 = 0x1c11;
+#[from_env]
+const PID: u16 = 0xb04d;
+#[from_env]
+const USB_MANUFACTURER: &'static str = "Unknown";
+#[from_env]
+const USB_PRODUCT: &'static str = "Kiibohd";
 
-impl KiibohdLogger {
-    pub const fn new(level_filter: log::LevelFilter) -> KiibohdLogger {
-        KiibohdLogger { level_filter }
-    }
-}
+// Define static lifetimes for USB
+type UsbDevice = usb_device::device::UsbDevice<'static, UdpBus>;
+type HidInterface = kiibohd_usb::HidInterface<'static, UdpBus>;
 
-impl log::Log for KiibohdLogger {
-    fn enabled(&self, metadata: &log::Metadata) -> bool {
-        self.level_filter.ge(&metadata.level())
-    }
-
-    fn log(&self, record: &log::Record) {
-        if self.enabled(record.metadata()) {
-            let color = match record.level() {
-                log::Level::Error => "1;5;31",
-                log::Level::Warn => "1;33",
-                log::Level::Info => "1;32",
-                log::Level::Debug => "1;35",
-                log::Level::Trace => "1;90",
-            };
-            rprintln!(
-                "\x1b[{}m{}\x1b[0m - {}",
-                color,
-                record.level(),
-                record.args()
-            );
-        }
-    }
-
-    fn flush(&self) {}
-}
-
-static LOGGER: KiibohdLogger = KiibohdLogger::new(log::LevelFilter::Trace);
+static LOGGER: Logger = Logger::new(log::LevelFilter::Trace);
 
 #[app(device = gemini::hal::pac, monotonic = rtic::cyccnt::CYCCNT)]
 const APP: () = {
@@ -80,6 +66,8 @@ const APP: () = {
         wdt: Watchdog,
         rtt: RealTimeTimer,
         rtt_host: rtt_target::DownChannel,
+        usb_dev: UsbDevice,
+        usb_hid: HidInterface,
     }
 
     //
@@ -87,10 +75,29 @@ const APP: () = {
     //
     #[init(schedule = [key_scan])]
     fn init(mut cx: init::Context) -> init::LateResources {
+        // TODO once_cell?
+        static mut USB_BUS: Option<UsbBusAllocator<UdpBus>> = None;
+
         // XXX (HaaTa): Fix this in the bootloader if possible!
         unsafe { cx.core.SCB.vtor.write(0x6000) };
 
-        let channels = rtt_init_default!();
+        // Setup RTT logging
+        //let channels = rtt_target::rtt_init_default!();
+        let channels = rtt_target::rtt_init! {
+            up: {
+                0: {
+                    size: 1024
+                    mode: BlockIfFull
+                    name: "Terminal"
+                }
+            }
+            down: {
+                0: {
+                    size: 16
+                    name: "Terminal"
+                }
+            }
+        };
         rtt_target::set_print_channel(channels.up.0);
         log::set_logger(&LOGGER).unwrap();
         log::set_max_level(log::LevelFilter::Trace);
@@ -123,16 +130,31 @@ const APP: () = {
                 clocks.peripheral_clocks.pio_b.into_enabled_clock(),
             ),
         );
-        let pins = Pins::new(gpio_ports);
+        let pins = Pins::new(gpio_ports, &peripherals.MATRIX);
 
         // Prepare watchdog to be fed
         let mut wdt = Watchdog::new(peripherals.WDT);
         wdt.feed();
         log::trace!("Watchdog first feed");
 
-        // Initialize controller
-        controller_setup();
-        log::trace!("controller_setup done");
+        // Setup USB
+        *USB_BUS = Some(UsbBusAllocator::<UdpBus>::new(UdpBus::new(
+            peripherals.UDP,
+            clocks.peripheral_clocks.udp,
+            pins.udp_ddm,
+            pins.udp_ddp,
+        )));
+        let usb_bus = USB_BUS.as_ref().unwrap();
+        let usb_hid = HidInterface::new(usb_bus, HidCountryCode::NotSupported);
+        let usb_dev = UsbDeviceBuilder::new(usb_bus, UsbVidPid(VID, PID))
+            .manufacturer(USB_MANUFACTURER)
+            .max_packet_size_0(64)
+            .max_power(500)
+            .product(USB_PRODUCT)
+            .supports_remote_wakeup(true) // TODO Add support
+            .build();
+        //.serial_number(&USB_SERIAL) // TODO how to store and format string
+        //.device_release() // TODO Get git revision info (sequential commit number)
 
         // Setup main timer (TODO May want to use a TC timer instead and reserve this for sleeping)
         let mut rtt = RealTimeTimer::new(peripherals.RTT, 3, false);
@@ -149,6 +171,8 @@ const APP: () = {
             wdt,
             rtt,
             rtt_host: channels.down.0,
+            usb_dev,
+            usb_hid,
         }
     }
 
@@ -158,6 +182,7 @@ const APP: () = {
     fn rtt(cx: rtt::Context) {
         cx.resources.rtt.clear_interrupt_flags();
         cx.resources.debug_led.toggle().ok();
+        log::info!("Blink");
     }
 
     /// Keyscanning Task
@@ -168,38 +193,47 @@ const APP: () = {
     fn key_scan(cx: key_scan::Context) {
         // TODO Only schedule on result
         //if unsafe { Scan_periodic() } != 0
+        /*
         {
             if cx.spawn.macro_process().is_err() {
                 log::warn!("Could not schedule macro_process");
             }
         }
+        */
 
+        /*
         if cx
             .schedule
-            .key_scan(Instant::now() + 48000.cycles())
+            .key_scan(Instant::now() + 4800000.cycles())
             .is_err()
         {
             log::warn!("Could not schedule key_scan");
         }
+        */
     }
 
     /// Macro Processing Task
     /// Handles incoming key scan triggers and turns them into results (actions and hid events)
-    #[task(spawn = [usb_process], priority = 14)]
+    #[task(spawn = [usb_process])]
     fn macro_process(cx: macro_process::Context) {
         // TODO Enable
         //unsafe { Macro_periodic() };
+        /*
         if cx.spawn.usb_process().is_err() {
             log::warn!("Could not schedule usb_process");
         }
+        */
     }
 
     /// USB Outgoing Events Task
     /// Sends outgoing USB HID events generated by the macro_process task
-    #[task(priority = 14)]
-    fn usb_process(_cx: usb_process::Context) {
+    #[task(resources = [usb_hid])]
+    fn usb_process(mut cx: usb_process::Context) {
         // TODO Enable
         //unsafe { Output_periodic() };
+        cx.resources.usb_hid.lock(|usb_hid| {
+            //usb_hid.push();
+        });
     }
 
     /// Background polling loop
@@ -207,6 +241,10 @@ const APP: () = {
     /// Scheduled tightly and at a low priority
     #[idle(resources = [rtt_host, wdt])]
     fn idle(cx: idle::Context) -> ! {
+        // Initialize controller
+        controller_setup();
+        log::trace!("controller_setup done");
+
         // TODO (HaaTa): This should be tuned
         //               Eventually each of these polling tasks should be split out
         //               but this will likely have to wait until the tasks are converted
@@ -214,25 +252,21 @@ const APP: () = {
 
         loop {
             // TODO Cleanup
-            unsafe {
-                // Gather RTT input and send to kiibohd/controller CLI module
-                let input = &mut *cx.resources.rtt_host;
-                let mut buf = [0u8; 16];
-                let count = input.read(&mut buf[..]);
-                CLI_pushInput(buf.as_ptr(), count as u8);
+            //unsafe {
+            /*
+            // Gather RTT input and send to kiibohd/controller CLI module
+            let input = &mut *cx.resources.rtt_host;
+            let mut buf = [0u8; 16];
+            let count = input.read(&mut buf[..]);
+            CLI_pushInput(buf.as_ptr(), count as u8);
 
-                // Process CLI
-                CLI_process();
+            // Process CLI
+            CLI_process();
+            */
 
-                // Scan module poll routines
-                //Scan_poll();
-
-                // Macro module poll routines
-                //Macro_poll();
-
-                // Output module poll routines
-                //Output_poll();
-            }
+            // Macro module poll routines
+            //Macro_poll();
+            //}
 
             // Not locked up, reset watchdog
             cx.resources.wdt.feed();
@@ -241,25 +275,28 @@ const APP: () = {
 
     #[task(binds = TWI0, priority = 12)]
     fn twi0(_: twi0::Context) {
-        unsafe { TWI0_Handler() };
+        //unsafe { TWI0_Handler() };
     }
 
     #[task(binds = TWI1, priority = 12)]
     fn twi1(_: twi1::Context) {
-        unsafe { TWI1_Handler() };
+        //unsafe { TWI1_Handler() };
     }
 
     #[task(binds = UART0, priority = 15)]
     fn uart0(_: uart0::Context) {
-        unsafe { UART0_Handler() };
+        //unsafe { UART0_Handler() };
     }
 
-    /*
-    #[task(binds = UDP, priority = 13)]
-    fn udp(_: udp::Context) {
-        //unsafe { UDP_Handler() };
+    #[task(binds = UDP, priority = 13, resources = [usb_dev, usb_hid])]
+    fn udp(cx: udp::Context) {
+        let usb_dev = cx.resources.usb_dev;
+        let usb_hid = cx.resources.usb_hid;
+        // Poll USB endpoints
+        if usb_dev.poll(&mut usb_hid.interfaces()) {
+            usb_hid.poll();
+        }
     }
-    */
 
     // RTIC requires that unused interrupts are declared in an extern block when
     // using software tasks; these free interrupts will be used to dispatch the
@@ -280,27 +317,31 @@ const APP: () = {
 };
 
 #[exception]
-fn HardFault(ef: &cortex_m_rt::ExceptionFrame) -> ! {
-    panic!("{:?}", ef);
+fn HardFault(_ef: &cortex_m_rt::ExceptionFrame) -> ! {
+    log::trace!("HF!");
+    loop {}
+    panic!("HardFault!");
 }
 
 fn controller_setup() {
+    /*
     unsafe {
-        Latency_init();
-        CLI_init();
+        //Latency_init();
+        //CLI_init();
 
         // TODO Periodic function
 
         //Storage_init();
-        //Output_setup();
         //Macro_setup();
-        //Scan_setup();
 
         //storage_load_settings();
     }
+    */
 }
 
 #[panic_handler]
 fn panic(info: &PanicInfo) -> ! {
-    panic!("Panic! {}", info);
+    log::error!("Panic! {}", info);
+    // TODO Handle restart in non-debug mode
+    loop {}
 }

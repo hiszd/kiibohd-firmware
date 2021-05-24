@@ -8,4 +8,5 @@ runner = 'arm-none-eabi-gdb'
 target = "thumbv7em-none-eabi"
 rustflags = [
    "-C", "link-arg=-Tlink.x",
+   "-C", "linker=flip-link",
 ]

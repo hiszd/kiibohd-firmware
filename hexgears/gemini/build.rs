@@ -22,6 +22,7 @@ fn main() {
     // TODO - Re-add once cmake is removed
     //println!("cargo:rerun-if-changed=memory.x");
     //println!("cargo:rerun-if-changed=build.rs");
+    println!("cargo:rerun-if-changed=project.env");
 
     // Read PID and HID from project.env
     let mut projectfile = match File::open("project.env") {
@@ -39,6 +40,9 @@ fn main() {
     let mut bpid_rslt = "";
     let mut vid_rslt = "";
     let mut pid_rslt = "";
+    let mut usb_manufacturer = "XXXX";
+    let mut usb_product = "YYYY";
+    let mut usb_serial_chip = "ZZZZ";
     for line in projectread.lines() {
         let curline = &line;
         if curline.contains("BOOT_VID=\"") {
@@ -73,8 +77,37 @@ fn main() {
                 .unwrap();
             let end = curline.rfind('\"').unwrap();
             pid_rslt = &curline[strt..end];
+        } else if curline.contains("USB_MANUFACTURER=\"") {
+            let strt = curline
+                .find("USB_MANUFACTURER=\"")
+                .unwrap()
+                .checked_add(18)
+                .unwrap();
+            let end = curline.rfind('\"').unwrap();
+            usb_manufacturer = &curline[strt..end];
+        } else if curline.contains("USB_PRODUCT=\"") {
+            let strt = curline
+                .find("USB_PRODUCT=\"")
+                .unwrap()
+                .checked_add(13)
+                .unwrap();
+            let end = curline.rfind('\"').unwrap();
+            usb_product = &curline[strt..end];
+        } else if curline.contains("USB_SERIAL_CHIP=\"") {
+            let strt = curline
+                .find("USB_SERIAL_CHIP=\"")
+                .unwrap()
+                .checked_add(17)
+                .unwrap();
+            let end = curline.rfind('\"').unwrap();
+            usb_serial_chip = &curline[strt..end];
         }
     }
+    println!("cargo:rustc-env=VID={}", vid_rslt);
+    println!("cargo:rustc-env=PID={}", pid_rslt);
+    println!("cargo:rustc-env=USB_MANUFACTURER={}", usb_manufacturer);
+    println!("cargo:rustc-env=USB_PRODUCT={}", usb_product);
+    println!("cargo:rustc-env=USB_SERIAL_CHIP={}", usb_serial_chip);
 
     // Load custom DefaultMap from Cargo.toml if one exists
     let defmap_rslt: String;
@@ -116,5 +149,5 @@ fn main() {
         .generator("Ninja")
         .build();
     println!("cargo:rustc-link-search=native={}/lib", dst.display());
-    println!("cargo:rustc-link-lib=static=kiibohd_static");
+    //println!("cargo:rustc-link-lib=static=kiibohd_static");
 }
