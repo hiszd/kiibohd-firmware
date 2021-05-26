@@ -49,6 +49,8 @@ const PID: u16 = 0xb04d;
 const USB_MANUFACTURER: &'static str = "Unknown";
 #[from_env]
 const USB_PRODUCT: &'static str = "Kiibohd";
+// TODO
+const USB_SERIAL: &'static str = ">TODO SERIAL<";
 
 // Define static lifetimes for USB
 type UsbDevice = usb_device::device::UsbDevice<'static, UdpBus>;
@@ -110,6 +112,7 @@ const APP: () = {
         // Setup main and slow clocks
         let peripherals = Peripherals::take().unwrap();
         log::trace!("Clock initialization");
+        loop {}
         let clocks = ClockController::new(
             peripherals.PMC,
             &peripherals.SUPC,
@@ -152,9 +155,9 @@ const APP: () = {
             .max_power(500)
             .product(USB_PRODUCT)
             .supports_remote_wakeup(true) // TODO Add support
+            //.serial_number(USB_SERIAL) // TODO how to store and format string
+            .device_release(0x1234) // TODO Get git revision info (sequential commit number)
             .build();
-        //.serial_number(&USB_SERIAL) // TODO how to store and format string
-        //.device_release() // TODO Get git revision info (sequential commit number)
 
         // Setup main timer (TODO May want to use a TC timer instead and reserve this for sleeping)
         let mut rtt = RealTimeTimer::new(peripherals.RTT, 3, false);
@@ -178,11 +181,17 @@ const APP: () = {
 
     //
     // LED Blink Task
+    //#[task(binds = RTT, resources = [rtt, debug_led, usb_hid])]
     #[task(binds = RTT, resources = [rtt, debug_led])]
-    fn rtt(cx: rtt::Context) {
+    fn rtt(mut cx: rtt::Context) {
         cx.resources.rtt.clear_interrupt_flags();
         cx.resources.debug_led.toggle().ok();
         log::info!("Blink");
+        /*
+        cx.resources.usb_hid.lock(|usb_hid| {
+            usb_hid.push();
+        });
+        */
     }
 
     /// Keyscanning Task
@@ -232,7 +241,7 @@ const APP: () = {
         // TODO Enable
         //unsafe { Output_periodic() };
         cx.resources.usb_hid.lock(|usb_hid| {
-            //usb_hid.push();
+            usb_hid.push();
         });
     }
 
@@ -318,7 +327,7 @@ const APP: () = {
 
 #[exception]
 fn HardFault(_ef: &cortex_m_rt::ExceptionFrame) -> ! {
-    log::trace!("HF!");
+    //log::trace!("HF!");
     loop {}
     panic!("HardFault!");
 }

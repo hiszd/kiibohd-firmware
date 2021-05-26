@@ -28,13 +28,9 @@ cstr_core = { version = "~0.2", default-features = false }
 embedded-hal = "~0.2.4"
 embedded-time = "0.10.1"
 kiibohd-core = { git = "https://github.com/kiibohd/kiibohd-core.git" }
-#kiibohd-log = { git = "https://github.com/kiibohd/kiibohd-core.git" }
-#kiibohd-log = { path = "/home/hyatt/Source/kiibohd/kiibohd-core/kiibohd-log", features = ["semihosting"] }
-#kiibohd-log = { path = "/home/hyatt/Source/kiibohd/kiibohd-core/kiibohd-log", features = ["semihosting", "rtt"] }
-kiibohd-log = { path = "/home/hyatt/Source/kiibohd/kiibohd-core/kiibohd-log", features = ["rtt"] }
-#kiibohd-usb = { git = "https://github.com/kiibohd/kiibohd-core.git" }
-kiibohd-usb = { path = "/home/hyatt/Source/kiibohd/kiibohd-core/kiibohd-usb" }
-log = { version = "~0.4", no_default_features = true, features = ["max_level_trace"] }
+kiibohd-log = { git = "https://github.com/kiibohd/kiibohd-core.git", features = ["rtt"] }
+kiibohd-usb = { git = "https://github.com/kiibohd/kiibohd-core.git" }
+log = { version = "~0.4", features = ["max_level_trace"] }
 nb = "~0.1"
 panic-abort = { version = "~0.3", optional = true }
 panic-halt = { version = "~0.2", optional = true }
@@ -48,23 +44,18 @@ optional = true
 features = ["jlink-quirks"]
 
 [dependencies.atsam4-hal]
-#git = "https://github.com/haata/atsam4-hal.git"
+git = "https://github.com/haata/atsam4-hal.git"
 #version = "~0.1.8"
-path = "/home/hyatt/git/atsam-rs/atsam4-hal"
 default-features = false
 features = ["atsam4s8b", "usb"]
 
 [features]
 default = [
-    "panic_semihosting",
-    #"panic_rtt_target",
+    #"panic_semihosting",
+    "panic_rtt_target",
 ]
 
 panic_halt = ["panic-halt"]
 panic_abort = ["panic-abort"]
 panic_semihosting = ["panic-semihosting"]
 panic_rtt_target = ["panic-rtt-target"]
-
-[patch.crates-io]
-atsam4-hal = { path = "/home/hyatt/git/atsam-rs/atsam4-hal" }
-#kiibohd-core = { path = "../../../kiibohd-core" }
