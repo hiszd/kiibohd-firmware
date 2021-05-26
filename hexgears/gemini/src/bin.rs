@@ -1,4 +1,4 @@
-// Copyright 2021 Jacob Alexander
+// Copyright 2021 Jacob Alexander, Zion Koyl
 //
 // Licensed under the Apache License, Version 2.0, <LICENSE-APACHE or
 // http://apache.org/licenses/LICENSE-2.0> or the MIT license <LICENSE-MIT or
@@ -15,6 +15,12 @@ use cortex_m_rt::exception;
 use rtic::app;
 use rtic::cyccnt::{Instant, U32Ext as _};
 use rtt_target::{rprintln, rtt_init_default};
+use embedded_time::{duration::*, rate::*};
+//use kiibohd_core::keyscanning::Scan;
+use kiibohd_core::keyscanning::matrix::{Matrix};
+use keyberon::impl_heterogenous_array;
+use generic_array::typenum::{U17, U6};
+use atsam4_hal::InputPin;
 
 use gemini::{
     controller::*,
@@ -25,6 +31,7 @@ use gemini::{
         prelude::*,
         watchdog::Watchdog,
         OutputPin,
+        rtt::*,
     },
     Pins,
 };
@@ -67,6 +74,47 @@ impl log::Log for KiibohdLogger {
 
 static LOGGER: KiibohdLogger = KiibohdLogger::new(log::LevelFilter::Trace);
 
+pub struct Rows(
+    pub Pa26<Input<PullDown>>,
+    pub Pa25<Input<PullDown>>,
+    pub Pa24<Input<PullDown>>,
+    pub Pa13<Input<PullDown>>,
+    pub Pa14<Input<PullDown>>,
+    pub Pa31<Input<PullDown>>,
+);
+impl_heterogenous_array! {
+    Rows,
+    dyn InputPin<Error = ()>,
+    U6,
+    [0, 1, 2, 3, 4, 5]
+}
+
+pub struct Cols(
+    pub Pb1<Output<PushPull>>,
+    pub Pb2<Output<PushPull>>,
+    pub Pb3<Output<PushPull>>,
+    pub Pa18<Output<PushPull>>,
+    pub Pa19<Output<PushPull>>,
+    pub Pa23<Output<PushPull>>,
+    pub Pa20<Output<PushPull>>,
+    pub Pa11<Output<PushPull>>,
+    pub Pa8<Output<PushPull>>,
+    pub Pa7<Output<PushPull>>,
+    pub Pa6<Output<PushPull>>,
+    pub Pa5<Output<PushPull>>,
+    pub Pa27<Output<PushPull>>,
+    pub Pa28<Output<PushPull>>,
+    pub Pa29<Output<PushPull>>,
+    pub Pa30<Output<PushPull>>,
+    pub Pa2<Output<PushPull>>,
+);
+impl_heterogenous_array! {
+    Cols,
+    dyn OutputPin<Error = ()>,
+    U17,
+    [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16]
+}
+
 #[app(device = gemini::hal::pac, monotonic = rtic::cyccnt::CYCCNT)]
 const APP: () = {
     //
@@ -76,6 +124,8 @@ const APP: () = {
         debug_led: Pb0<Output<PushPull>>,
         wdt: Watchdog,
         rtt_host: rtt_target::DownChannel,
+        rtt: RealTimeTimer,
+        scan_periodic: Matrix<Cols, Rows>,
     }
 
     //
@@ -108,6 +158,11 @@ const APP: () = {
         );
         log::trace!("Clock initialized");
 
+        let mut rtt = RealTimeTimer::new(peripherals.RTT, 3, false);
+        rtt.start(1_000u32.microseconds());
+        rtt.enable_alarm_interrupt();
+        log::trace!("RTT initialized");
+
         // Setup gpios
         let gpio_ports = Ports::new(
             (
@@ -119,7 +174,41 @@ const APP: () = {
                 clocks.peripheral_clocks.pio_b.into_enabled_clock(),
             ),
         );
-        let pins = Pins::new(gpio_ports);
+        let pins = Pins::new(gpio_ports, &peripherals.MATRIX);
+
+        // Configure GPIO pins for sense and strobe
+        //let rows = RowArray::new([&pins.sense1, &pins.sense2, &pins.sense3, &pins.sense4, &pins.sense5, &pins.sense6], 6);
+        //let cols = ColArray::new([&mut pins.strobe1, &mut pins.strobe2, &mut pins.strobe3, &mut pins.strobe4, &mut pins.strobe5, &mut pins.strobe6, &mut pins.strobe7, &mut pins.strobe8, &mut pins.strobe9, &mut pins.strobe10, &mut pins.strobe11, &mut pins.strobe12, &mut pins.strobe13, &mut pins.strobe14, &mut pins.strobe15, &mut pins.strobe16, &mut pins.strobe17],17);
+        let scan = Matrix::new(
+            Cols(
+                pins.strobe1,
+                pins.strobe2,
+                pins.strobe3,
+                pins.strobe4,
+                pins.strobe5,
+                pins.strobe6,
+                pins.strobe7,
+                pins.strobe8,
+                pins.strobe9,
+                pins.strobe10,
+                pins.strobe11,
+                pins.strobe12,
+                pins.strobe13,
+                pins.strobe14,
+                pins.strobe15,
+                pins.strobe16,
+                pins.strobe17,
+            ),
+            Rows(
+                pins.sense1,
+                pins.sense2,
+                pins.sense3,
+                pins.sense4,
+                pins.sense5,
+                pins.sense6,
+            ),
+            1_000u32.microseconds()
+        );
 
         // Prepare watchdog to be fed
         let mut wdt = Watchdog::new(peripherals.WDT);
@@ -143,7 +232,16 @@ const APP: () = {
             debug_led: pins.debug_led,
             wdt,
             rtt_host: channels.down.0,
+            rtt: rtt,
+            scan_periodic: scan.unwrap(),
         }
+    }
+
+    #[task(binds = RTT, resources = [rtt, scan_periodic])]
+    fn rtt(cx: rtt::Context) {
+        cx.resources.rtt.clear_interrupt_flags();
+        cx.resources.scan_periodic.get();
+        log::info!("Scan Complete!");
     }
 
     //
