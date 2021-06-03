@@ -12,6 +12,7 @@ pub use atsam4_hal as hal;
 use paste::paste;
 
 use atsam4_hal::{define_pin_map, gpio::*};
+use hal::pac::MATRIX; //TODO Deal with this in the macro definition for define_pin_map
 
 define_pin_map! {
     struct Pins,

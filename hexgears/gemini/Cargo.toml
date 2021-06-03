@@ -17,7 +17,7 @@ name = "gemini"
 path = "src/bin.rs"
 
 [build-dependencies]
-cmake = "0.1"
+cmake = "0.1.45"
 
 [dependencies]
 const_env = "0.1"
@@ -28,21 +28,23 @@ cstr_core = { version = "~0.2", default-features = false }
 embedded-hal = "~0.2.4"
 embedded-time = "0.10.1"
 #kiibohd-core = { git = "https://github.com/kiibohd/kiibohd-core.git", branch="main"}
-kiibohd-core = "0.1.0"
+#kiibohd-core = "0.1.0"
+kiibohd-keyscanning = { path = "../../../kiibohd-core/kiibohd-keyscanning" }
 log = {version = "~0.4", no_default_features = true, features = ["max_level_trace"] }
 nb = "~0.1"
 paste = "1.0"
 rtt-target = { version = "0.3.1", features = ["cortex-m"] }
 generic-array   = "0.14.4"
 keyberon        = "0.1.1"
+kiibohd-log = { path = "../../../kiibohd-core/kiibohd-log", features = ["semihosting"] }
 
 panic-abort = { version = "~0.3", optional = true }
 panic-halt = { version = "~0.2", optional = true }
 panic-rtt-target = { version = "~0.1", optional = true, features = ["cortex-m"] }
 
 [dependencies.atsam4-hal]
-#git = "https://github.com/atsam-rs/atsam4-hal.git"
-path = "../../../atsam4-hal"
+git = "https://github.com/atsam-rs/atsam4-hal.git"
+#path = "../../../atsam4-hal"
 version = "~0.1.14"
 default-features = false
 features = ["atsam4s8b"]
@@ -58,4 +60,6 @@ panic_rtt_target = ["panic-rtt-target"]
 
 [patch.crates-io]
 #atsam4-hal = { path = "/home/hyatt/git/atsam-rs/atsam4-hal" }
-kiibohd-core = { path = "../../../kiibohd-core" }
+#kiibohd-core = { path = "../../../kiibohd-core" }
+
+

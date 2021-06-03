@@ -116,5 +116,5 @@ fn main() {
         .generator("Ninja")
         .build();
     println!("cargo:rustc-link-search=native={}/lib", dst.display());
-    println!("cargo:rustc-link-lib=static=kiibohd_static");
+    //println!("cargo:rustc-link-lib=static=kiibohd_static");
 }

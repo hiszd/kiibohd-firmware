@@ -5,6 +5,13 @@
 // http://opensource.org/licenses/MIT>, at your option. This file may not be
 // copied, modified, or distributed except according to those terms.
 
+// Error in the segger_rtt section 95% certain
+// Writing a buffer(not sure which one) over necessary data
+// TODO determine starting memory address in the heap
+// TODO how to watch/monitor memory in GDB
+// Likely what is happening is size is not defined correctly for something in unsafe code
+
+
 // TODO Remove this
 #![allow(clippy::inconsistent_struct_constructor)]
 #![no_std]
@@ -12,15 +19,15 @@
 
 use core::panic::PanicInfo;
 use cortex_m_rt::exception;
+use embedded_time::duration::*;
 use rtic::app;
 use rtic::cyccnt::{Instant, U32Ext as _};
-use rtt_target::{rprintln, rtt_init_default};
-use embedded_time::{duration::*, rate::*};
+use rtt_target::{rprintln, rtt_init_default, set_print_channel};
 //use kiibohd_core::keyscanning::Scan;
-use kiibohd_core::keyscanning::matrix::{Matrix};
-use keyberon::impl_heterogenous_array;
-use generic_array::typenum::{U17, U6};
 use atsam4_hal::InputPin;
+use generic_array::typenum::{U17, U6};
+use keyberon::impl_heterogenous_array;
+use kiibohd_keyscanning::matrix::{Matrix, StateReturn, State};
 
 use gemini::{
     controller::*,
@@ -29,9 +36,9 @@ use gemini::{
         gpio::*,
         pac::Peripherals,
         prelude::*,
+        rtt::*,
         watchdog::Watchdog,
         OutputPin,
-        rtt::*,
     },
     Pins,
 };
@@ -131,20 +138,19 @@ const APP: () = {
     //
     // Initialization
     //
-    #[init(schedule = [blink_led, key_scan])]
+    #[init(schedule = [key_scan])]
     fn init(mut cx: init::Context) -> init::LateResources {
         // XXX (HaaTa): Fix this in the bootloader if possible!
         unsafe { cx.core.SCB.vtor.write(0x6000) };
+        // Initialize (enable) the monotonic timer (CYCCNT)
+        cx.core.DCB.enable_trace();
+        cx.core.DWT.enable_cycle_counter();
 
         let channels = rtt_init_default!();
         rtt_target::set_print_channel(channels.up.0);
         log::set_logger(&LOGGER).unwrap();
         log::set_max_level(log::LevelFilter::Trace);
         log::info!(">>>> Initializing <<<<");
-
-        // Initialize (enable) the monotonic timer (CYCCNT)
-        cx.core.DCB.enable_trace();
-        cx.core.DWT.enable_cycle_counter();
 
         // Setup main and slow clocks
         let peripherals = Peripherals::take().unwrap();
@@ -158,8 +164,9 @@ const APP: () = {
         );
         log::trace!("Clock initialized");
 
+        // Setup RTT
         let mut rtt = RealTimeTimer::new(peripherals.RTT, 3, false);
-        rtt.start(1_000u32.microseconds());
+        rtt.start(100_000_u32.microseconds());
         rtt.enable_alarm_interrupt();
         log::trace!("RTT initialized");
 
@@ -176,7 +183,9 @@ const APP: () = {
         );
         let pins = Pins::new(gpio_ports, &peripherals.MATRIX);
 
+
         // Configure GPIO pins for sense and strobe
+        //TODO Remove dead code after testing
         //let rows = RowArray::new([&pins.sense1, &pins.sense2, &pins.sense3, &pins.sense4, &pins.sense5, &pins.sense6], 6);
         //let cols = ColArray::new([&mut pins.strobe1, &mut pins.strobe2, &mut pins.strobe3, &mut pins.strobe4, &mut pins.strobe5, &mut pins.strobe6, &mut pins.strobe7, &mut pins.strobe8, &mut pins.strobe9, &mut pins.strobe10, &mut pins.strobe11, &mut pins.strobe12, &mut pins.strobe13, &mut pins.strobe14, &mut pins.strobe15, &mut pins.strobe16, &mut pins.strobe17],17);
         let scan = Matrix::new(
@@ -207,7 +216,7 @@ const APP: () = {
                 pins.sense5,
                 pins.sense6,
             ),
-            1_000u32.microseconds()
+            100_000_u32.microseconds(),
         );
 
         // Prepare watchdog to be fed
@@ -223,9 +232,10 @@ const APP: () = {
         cx.schedule.key_scan(cx.start).unwrap();
 
         // Task scheduling
+        /*
         cx.schedule
             .blink_led(cx.start + get_master_clock_frequency().0.cycles())
-            .unwrap();
+            .unwrap();*/
         log::trace!("All tasks scheduled");
 
         init::LateResources {
@@ -237,17 +247,33 @@ const APP: () = {
         }
     }
 
-    #[task(binds = RTT, resources = [rtt, scan_periodic])]
+    #[task(binds = RTT, resources = [scan_periodic, rtt, debug_led])]
     fn rtt(cx: rtt::Context) {
         cx.resources.rtt.clear_interrupt_flags();
-        cx.resources.scan_periodic.get();
-        log::info!("Scan Complete!");
+        /*
+        unsafe {
+            static mut state: bool = false;
+
+            if state == false {
+                cx.resources.debug_led.set_low().ok();
+                state = true;
+            } else {
+                cx.resources.debug_led.set_high().ok();
+                state = false;
+            }
+            log::debug!("Blink");
+        }*/
+        cx.resources.scan_periodic.get(|state: StateReturn, i: usize, j: usize, high: bool| {
+            if state.state_change == true {
+                log::debug!("{:?} ({}, {}), {}", state.ending_state, i, j, high);
+            }
+        }).unwrap();
     }
 
     //
     // LED Blink Task
     //
-    #[task(resources = [debug_led], schedule = [blink_led])]
+    /*#[task(resources = [debug_led], schedule = [blink_led])]
     fn blink_led(cx: blink_led::Context) {
         static mut STATE: bool = false;
 
@@ -264,7 +290,7 @@ const APP: () = {
                 .unwrap();
             *STATE = false;
         }
-    }
+    }*/
 
     /// Keyscanning Task
     /// High-priority scheduled tasks as consistency is more important than speed for scanning
@@ -320,7 +346,7 @@ const APP: () = {
 
         loop {
             // TODO Cleanup
-            unsafe {
+            /*unsafe {
                 // Gather RTT input and send to kiibohd/controller CLI module
                 let input = &mut *cx.resources.rtt_host;
                 let mut buf = [0u8; 16];
@@ -338,7 +364,7 @@ const APP: () = {
 
                 // Output module poll routines
                 //Output_poll();
-            }
+            }*/
 
             // Not locked up, reset watchdog
             cx.resources.wdt.feed();
@@ -347,22 +373,22 @@ const APP: () = {
 
     #[task(binds = TWI0, priority = 12)]
     fn twi0(_: twi0::Context) {
-        unsafe { TWI0_Handler() };
+        //unsafe { TWI0_Handler() };
     }
 
     #[task(binds = TWI1, priority = 12)]
     fn twi1(_: twi1::Context) {
-        unsafe { TWI1_Handler() };
+        //unsafe { TWI1_Handler() };
     }
 
     #[task(binds = UART0, priority = 15)]
     fn uart0(_: uart0::Context) {
-        unsafe { UART0_Handler() };
+        //unsafe { UART0_Handler() };
     }
 
     #[task(binds = UDP, priority = 13)]
     fn udp(_: udp::Context) {
-        unsafe { UDP_Handler() };
+        //unsafe { UDP_Handler() };
     }
 
     // RTIC requires that unused interrupts are declared in an extern block when
@@ -390,8 +416,8 @@ fn HardFault(ef: &cortex_m_rt::ExceptionFrame) -> ! {
 
 fn controller_setup() {
     unsafe {
-        Latency_init();
-        CLI_init();
+        //Latency_init();
+        //CLI_init();
 
         // TODO Periodic function
 
